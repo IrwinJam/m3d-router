@@ -8,12 +8,12 @@ Score = geometric mean of `baseline / mine` from the challenge's scorer (baselin
 
 | tier | score | previous best |
 |---|---:|---:|
-| intro | **1.1383** | 1.0000 |
-| hard | **1.3609** | 1.0168 |
-| scale | **1.1143** | 1.0000 |
-| stress | **1.0763** | 1.0000 |
-| congested | **1.2625** | 1.0000 |
-| designs | **1.3867** | 1.0000 |
+| intro | **1.1444** | 1.0000 |
+| hard | **1.3845** | 1.0168 |
+| scale | **1.1188** | 1.0000 |
+| stress | **1.0779** | 1.0000 |
+| congested | **1.3069** | 1.0000 |
+| designs | **1.4237** | 1.0000 |
 
 ## Usage
 

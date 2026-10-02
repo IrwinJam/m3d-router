@@ -55,9 +55,9 @@ def main():
     meta = {
         "author": a.author,
         "url": a.url,
-        "method": ("Source-aware shortest-path-tree nets + slow negotiated congestion "
-                   "(PathFinder) + per-net exact SPT refinement + annealed large-"
-                   "neighbourhood search (numba)"),
+        "method": ("Source-aware shortest-path-tree nets + slow fanout-scaled negotiated "
+                   "congestion (PathFinder) + per-net exact SPT refinement + annealed "
+                   "large-neighbourhood search with ideal-tree and window moves (numba)"),
         "date": a.date,
     }
     with open(os.path.join(dest, "meta.json"), "w") as fh:

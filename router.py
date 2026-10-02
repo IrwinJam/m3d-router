@@ -101,8 +101,9 @@ class Router:
     # ------------------------------------------------------------------
     def negotiate(self, order, pres0=0.5, mult=1.5, hist_fac=1.0, vcost=3.0,
                   alpha=1.0, max_iters=300, pres_max=4.0, full_every=0,
-                  legalize_at=0, legalize_every=10):
+                  legalize_at=0, legalize_every=10, fan_exp=0.0):
         self.reset()
+        self.fan = np.array([float(len(p) - 1) ** -fan_exp for p in self.net_pins])
         return self._negotiate(order, self.zeros_i, self.occ, self.hist, pres0, mult,
                                hist_fac, vcost, alpha, max_iters, pres_max, full_every,
                                legalize_at, legalize_every)
@@ -133,6 +134,9 @@ class Router:
         negotiated nets (self.occ is kept in sync when occ is self.occ)."""
         pres = pres0
         sep = occ is not self.occ
+        fan = getattr(self, "fan", None)
+        if fan is None:
+            fan = np.ones(self.nnets)
         def add(i, r):
             self.routes[i] = r; occ[r[0]] += 1
             if sep: self.occ[r[0]] += 1
@@ -141,7 +145,7 @@ class Router:
             if sep: self.occ[r[0]] -= 1
             self.routes[i] = None
         for i in order:
-            r = self._route(i, block, occ, hist, pres, vcost, alpha)
+            r = self._route(i, block, occ, hist, pres, vcost * fan[i], alpha)
             if r is None:
                 return -1
             add(i, r)
@@ -158,7 +162,7 @@ class Router:
             for i in order:
                 if full or over[self.routes[i][0]].any():
                     rem(i)
-                    r = self._route(i, block, occ, hist, pres, vcost, alpha)
+                    r = self._route(i, block, occ, hist, pres, vcost * fan[i], alpha)
                     if r is None:
                         return -1
                     add(i, r)
@@ -183,7 +187,7 @@ class Router:
     # ------------------------------------------------------------------
     def lns(self, iters=2000, max_set=12, neg_iters=60, time_limit=None,
             neg_kw=None, verbose=False, p_seq=0.5, refine_passes=2,
-            T0=0.0, T1=0.0):
+            T0=0.0, T1=0.0, p_win=0.0):
         """Large-neighbourhood search. Moves: rip up a high-excess seed net plus the
         nets blocking its ideal tree; rebuild either (a) sequentially, seed first as an
         exact SPT, or (b) by negotiating the set; refine; accept by annealing on the
@@ -214,7 +218,18 @@ class Router:
             p = excess + 0.05 * excess.mean() + 1e-9
             seed = int(rng.choice(self.nnets, p=p / p.sum()))
             S = [seed]
-            cand = [int(b) for b in np.unique(owner[self.ideal[seed][0]]) if b >= 0 and b != seed]
+            if rng.random() < p_win:
+                # window move: every net crossing a small box (all layers) around a
+                # random vertex of the seed's current route
+                v = int(rng.choice(self.routes[seed][0]))
+                rad = int(rng.integers(2, 6))
+                z, rr = divmod(v, self.W * self.H)
+                y, x = divmod(rr, self.W)
+                box = owner.reshape(self.L, self.H, self.W)[
+                    :, max(0, y - rad):y + rad + 1, max(0, x - rad):x + rad + 1]
+                cand = [int(b) for b in np.unique(box) if b >= 0 and b != seed]
+            else:
+                cand = [int(b) for b in np.unique(owner[self.ideal[seed][0]]) if b >= 0 and b != seed]
             rng.shuffle(cand)
             S += cand[:max_set - 1]
             if len(S) < max_set and rng.random() < 0.5:
@@ -303,6 +318,34 @@ class Router:
         return self.total()
 
     # ------------------------------------------------------------------
+    def load(self, sol):
+        """Load a legal solution (submission dict) as the current routing."""
+        W, H = self.W, self.H
+        wh = W * H
+        idx = {n["id"]: i for i, n in enumerate(self.inst["nets"])}
+        self.reset()
+        for r in sol["routes"]:
+            i = idx[r["net"]]
+            adj = {}
+            for (a, b) in r["edges"]:
+                u = (a[2] * H + a[1]) * W + a[0]
+                v = (b[2] * H + b[1]) * W + b[0]
+                adj.setdefault(u, []).append(v)
+                adj.setdefault(v, []).append(u)
+            pins = self.net_pins[i]
+            driver = int(pins[0])
+            verts, par, dl = [driver], [-1], {driver: 0.0}
+            k = 0
+            while k < len(verts):
+                u = verts[k]; k += 1
+                for v in adj.get(u, ()):
+                    if v not in dl:
+                        w = self.via if abs(v - u) == wh else self.ld[u // wh]
+                        dl[v] = dl[u] + w
+                        verts.append(v); par.append(u)
+            delay = sum(dl[int(s)] for s in pins[1:])
+            self._add(i, (np.array(verts, np.int64), np.array(par, np.int64), delay))
+
     def solution(self):
         W, H = self.W, self.H
         def c(v):

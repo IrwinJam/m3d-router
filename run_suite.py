@@ -17,7 +17,7 @@ REPO = os.environ.get("M3D_REPO", os.path.join(HERE, "..", "eda-3d-routing-chall
 sys.path.insert(0, REPO)
 
 
-SLOW = dict(pres0=0.05, mult=1.03, hist_fac=0.05, pres_max=3, max_iters=3000, vcost=2.0)
+SLOW = dict(pres0=0.05, mult=1.03, hist_fac=0.05, pres_max=3, max_iters=8000, vcost=3.0, fan_exp=0.5)
 LNS = dict(p_seq=0.2, max_set=6, T0=50, T1=2)
 
 
