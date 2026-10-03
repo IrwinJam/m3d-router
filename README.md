@@ -9,18 +9,18 @@ every net legal, and minimize total delay.
 Score = geometric mean of `baseline_delay / my_delay` from the challenge's own
 scorer (baseline = 1.0, higher is better). All 45 cases legal.
 
-| tier | score | rank | #1 |
-|---|---:|---:|---:|
-| intro | **1.1444** | 4 | 1.1514 |
-| hard | **1.3971** | 1 | 1.3884 |
-| scale | **1.1188** | 4 | 1.1277 |
-| stress | **1.0779** | 4 | 1.0914 |
-| congested | **1.3069** | 3 | 1.3111 |
-| designs | **1.4237** | 4 | 1.4354 |
+| tier | score | best on `main` |
+|---|---:|---:|
+| intro | **1.1444** | 1.1514 |
+| hard | **1.3971** | 1.3884 |
+| scale | **1.1188** | 1.1277 |
+| stress | **1.0779** | 1.0914 |
+| congested | **1.3069** | 1.3111 |
+| designs | **1.4237** | 1.4354 |
 
-Ranks are with my latest update (submitted 2–3 Oct 2026, pending merge). On hard
-my routes score above every entry, merged or open. On the other tiers the only
-independent entry ahead of mine is #1; the others above it build on #1's routes. I also got a
+Scores are from my latest update (submitted 3 Oct 2026, pending merge). On hard it
+beats every entry merged so far, and my routes are my own router's work throughout.
+I also got a
 [Windows fix](https://github.com/partcleda/eda-3d-routing-challenge/pull/13)
 merged into the challenge toolkit.
 
@@ -52,7 +52,7 @@ Python with numba, run on a 12-thread desktop.
   routing, was the real problem.
 * A walled-in net can loop forever in PathFinder; capping the congestion penalty fixed it.
 * Spreading compute evenly stalls; focusing every core on the few cases with the
-  biggest gap, with many fresh restarts, is what took hard to first.
+  biggest gap, with many fresh restarts, took hard from 1.3845 to 1.3971 overnight.
 
 ## Usage
 
