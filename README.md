@@ -12,14 +12,15 @@ scorer (baseline = 1.0, higher is better). All 45 cases legal.
 | tier | score | rank | #1 |
 |---|---:|---:|---:|
 | intro | **1.1444** | 4 | 1.1514 |
-| hard | **1.3845** | 4 | 1.3884 |
+| hard | **1.3971** | 1 | 1.3884 |
 | scale | **1.1188** | 4 | 1.1277 |
 | stress | **1.0779** | 4 | 1.0914 |
 | congested | **1.3069** | 3 | 1.3111 |
 | designs | **1.4237** | 4 | 1.4354 |
 
-Ranks are with my latest update (submitted 2 Oct 2026). The only independent
-entry ahead of mine is #1; the others above it build on #1's routes. I also got a
+Ranks are with my latest update (submitted 2–3 Oct 2026, pending merge). On hard
+my routes score above every entry, merged or open. On the other tiers the only
+independent entry ahead of mine is #1; the others above it build on #1's routes. I also got a
 [Windows fix](https://github.com/partcleda/eda-3d-routing-challenge/pull/13)
 merged into the challenge toolkit.
 
@@ -50,8 +51,8 @@ Python with numba, run on a 12-thread desktop.
 * Measure first: a congestion-free ceiling showed congestion, not single-net
   routing, was the real problem.
 * A walled-in net can loop forever in PathFinder; capping the congestion penalty fixed it.
-* By the end, more run time barely helped. Closing the last gap to #1 would need
-  a different approach, like solving small regions exactly.
+* Spreading compute evenly stalls; focusing every core on the few cases with the
+  biggest gap, with many fresh restarts, is what took hard to first.
 
 ## Usage
 

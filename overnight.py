@@ -104,24 +104,34 @@ def main():
     ap.add_argument("--jobs", type=int, default=12)
     ap.add_argument("--best-root", required=True)
     ap.add_argument("--p-fresh", type=float, default=0.25)
+    ap.add_argument("--only", help="focus on cases, e.g. hard:case_07=6,hard:case_08=3")
+    ap.add_argument("--chunk", type=float, help="chunk length in minutes (overrides per-tier)")
     a = ap.parse_args()
+    only = {}
+    if a.only:
+        for item in a.only.split(","):
+            key, _, w = item.partition("=")
+            only[key] = float(w or 1)
     deadline = time.time() + a.hours * 3600
     cases = []
     for tier, d in TIER_DIR.items():
         suite = json.load(open(os.path.join(REPO, d, "suite.json")))
         for c in suite["cases"]:
+            if only and f"{tier}:{c['name']}" not in only:
+                continue
             cases.append((tier, os.path.join(REPO, d, c["instance_file"]),
                           os.path.join(a.best_root, tier, f"{c['name']}.sol.json")))
-    rng = random.Random(12345)
-    weights = [TIER_WEIGHT[t] for t, _, _ in cases]
+    rng = random.Random(int(time.time()))
+    weights = [only.get(f"{t}:{os.path.basename(bp)[:-9]}", TIER_WEIGHT[t]) if only else TIER_WEIGHT[t]
+               for t, _, bp in cases]
     tasks = []
     # one long from-scratch slow-negotiation attempt on stress (never tried before)
     for t, cf, bp in cases:
-        if t == "stress":
+        if t == "stress" and not only:
             tasks.append((t, cf, bp, 240, 999, deadline, 2))
     for k in range(5000):
         t, cf, bp = rng.choices(cases, weights)[0]
-        tasks.append((t, cf, bp, CHUNK_MIN[t], 1000 + k, deadline,
+        tasks.append((t, cf, bp, a.chunk or CHUNK_MIN[t], rng.randrange(10**6), deadline,
                       1 if rng.random() < a.p_fresh else 0))
     with Pool(a.jobs, maxtasksperchild=1) as pool:
         for res in pool.imap_unordered(chunk, tasks):
