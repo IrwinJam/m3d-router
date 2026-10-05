@@ -13,7 +13,7 @@ Pipeline per case:
 """
 import numpy as np
 
-from core import route_net, make_VA
+from core import route_net, make_VA, route_net_b, make_HTi, NBUCKET
 
 
 class Router:
@@ -46,6 +46,15 @@ class Router:
         self.ctr = np.zeros(1, np.int64)
         self.outv = np.zeros(N, np.int64)
         self.closed = np.zeros(N, np.int64)
+        self.kernel = "heap"
+        self.HTi = make_HTi(self.L, self.via, self.ld, self.W + self.H)
+        self.dist_i = np.zeros(N, np.int64)
+        self.cnt_i = np.zeros(N, np.int64)
+        self.bhead = np.zeros(NBUCKET, np.int64)
+        self.bstamp = np.zeros(NBUCKET, np.int64)
+        self.ev = np.zeros(6 * N + 16, np.int64)
+        self.eg = np.zeros(6 * N + 16, np.int64)
+        self.enext = np.zeros(6 * N + 16, np.int64)
         self.VA = make_VA(self.L, self.via)
         self.zeros_i = np.zeros(N, np.int64)
         self.zeros_f = np.zeros(N, np.float64)
@@ -72,6 +81,16 @@ class Router:
     def _route(self, i, block, occ=None, hist=None, pres=0.0, vcost=0.0, alpha=1.0):
         if occ is None:
             occ, hist = self.zeros_i, self.zeros_f
+        if self.kernel == "bucket" and alpha == 1.0:
+            n, d = route_net_b(self.W, self.H, self.L, self.ld, self.via, self.pin_net, i,
+                               self.net_pins[i], block, occ, hist, pres, vcost,
+                               self.dist_i, self.cnt_i, self.prev, self.stamp, self.tstamp,
+                               self.tdel, self.tpar, self.ctr, self.outv, self.closed,
+                               self.HTi, self.bhead, self.bstamp, self.ev, self.eg, self.enext)
+            if n < 0:
+                return None
+            v = self.outv[:n].copy()
+            return v, self.tpar[v].copy(), d
         n, d = route_net(self.W, self.H, self.L, self.ld, self.via, self.pin_net, i,
                          self.net_pins[i], block, occ, hist, pres, vcost,
                          self.dist, self.prev, self.stamp, self.tstamp, self.tdel,
@@ -187,7 +206,7 @@ class Router:
     # ------------------------------------------------------------------
     def lns(self, iters=2000, max_set=12, neg_iters=60, time_limit=None,
             neg_kw=None, verbose=False, p_seq=0.5, refine_passes=2,
-            T0=0.0, T1=0.0, p_win=0.0):
+            T0=0.0, T1=0.0, p_win=0.0, p_joint=0.0):
         """Large-neighbourhood search. Moves: rip up a high-excess seed net plus the
         nets blocking its ideal tree; rebuild either (a) sequentially, seed first as an
         exact SPT, or (b) by negotiating the set; refine; accept by annealing on the
@@ -203,7 +222,7 @@ class Router:
         cur = self.total()
         best = cur
         best_routes = list(self.routes)
-        self.stats = dict(fail=0, worse=0, acc=0, uphill=0, seq=0, neg=0)
+        self.stats = dict(fail=0, worse=0, acc=0, uphill=0, seq=0, neg=0, joint=0)
         rng = self.rng
         for it in range(iters):
             el = time.time() - t0
@@ -218,7 +237,18 @@ class Router:
             p = excess + 0.05 * excess.mean() + 1e-9
             seed = int(rng.choice(self.nnets, p=p / p.sum()))
             S = [seed]
-            if rng.random() < p_win:
+            joint = rng.random() < p_joint
+            if joint:
+                # joint move: the seed plus the nets that overlap its ideal tree most
+                bl = owner[self.ideal[seed][0]]
+                bl = bl[(bl >= 0) & (bl != seed)]
+                if len(bl) == 0:
+                    continue
+                ids, counts = np.unique(bl, return_counts=True)
+                k = min(len(ids), int(rng.integers(1, 4)))
+                pick = rng.choice(len(ids), size=k, replace=False, p=counts / counts.sum())
+                cand = [int(ids[j]) for j in pick]
+            elif rng.random() < p_win:
                 # window move: every net crossing a small box (all layers) around a
                 # random vertex of the seed's current route
                 v = int(rng.choice(self.routes[seed][0]))
@@ -230,9 +260,10 @@ class Router:
                 cand = [int(b) for b in np.unique(box) if b >= 0 and b != seed]
             else:
                 cand = [int(b) for b in np.unique(owner[self.ideal[seed][0]]) if b >= 0 and b != seed]
-            rng.shuffle(cand)
+            if not joint:
+                rng.shuffle(cand)
             S += cand[:max_set - 1]
-            if len(S) < max_set and rng.random() < 0.5:
+            if not joint and len(S) < max_set and rng.random() < 0.5:
                 for b in list(S[1:]):
                     for m in np.unique(owner[self.ideal[b][0]]):
                         m = int(m)
@@ -246,7 +277,10 @@ class Router:
             rest = S[1:]
             rng.shuffle(rest)
             ok = False
-            if rng.random() < p_seq:
+            if joint:
+                self.stats['joint'] += 1
+                ok = self._joint_build(S, old, rng)
+            elif rng.random() < p_seq:
                 # (a) sequential: seed first as exact SPT, then the rest greedily
                 self.stats['seq'] += 1
                 ok = True
@@ -256,7 +290,7 @@ class Router:
                         ok = False
                         break
                     self._add(i, r)
-            if not ok:
+            if not ok and not joint:
                 for i in S:
                     if self.routes[i] is not None:
                         self._rem(i)
@@ -316,6 +350,72 @@ class Router:
         for i in range(self.nnets):
             self._add(i, best_routes[i])
         return self.total()
+
+
+    def _joint_build(self, G, old, rng, n_soft=2):
+        """Jointly re-choose routes for the small group G (already removed; all other
+        nets fixed in self.occ). Each net gets a few candidate trees: its exact best
+        ignoring the group, 'yield' trees that avoid the other members' best trees,
+        randomly penalized trees, and its current tree. The best vertex-disjoint
+        combination is then found exactly by branch and bound over the candidates.
+        The current trees are always a feasible combination, so this never fails."""
+        best0 = {}
+        for i in G:
+            r = self._route(i, self.occ)
+            if r is not None:
+                best0[i] = r
+        cands = {}
+        for i in G:
+            cs = [old[i]]
+            if i in best0:
+                cs.append(best0[i])
+            others = np.zeros(self.N, np.int64)
+            for j in G:
+                if j != i and j in best0:
+                    others[best0[j][0]] += 1
+            if others.any():
+                r = self._route(i, self.occ + others)                 # yield to the others
+                if r is not None:
+                    cs.append(r)
+                hist0 = np.zeros(self.N, np.float64)
+                for _ in range(n_soft):                                # penalized variants
+                    r = self._route(i, self.occ, others, hist0,
+                                    float(rng.uniform(0.3, 3.0)), float(rng.uniform(1.0, 6.0)))
+                    if r is not None:
+                        cs.append(r)
+            uniq, seen = [], set()
+            for c in sorted(cs, key=lambda c: c[2]):
+                key = (round(c[2], 6), len(c[0]), int(c[0].sum()))
+                if key not in seen:
+                    seen.add(key); uniq.append(c)
+            cands[i] = uniq
+        order = sorted(G, key=lambda i: -len(cands[i]))
+        sets = {i: [set(c[0].tolist()) for c in cands[i]] for i in G}
+        mins = [min(c[2] for c in cands[i]) for i in order]
+        suffix = np.concatenate([np.cumsum(mins[::-1])[::-1], [0.0]])
+        best = [sum(old[i][2] for i in G) + 1e-9, None]
+        choice = [0] * len(order)
+
+        def dfs(k, used, acc):
+            if acc + suffix[k] >= best[0]:
+                return
+            if k == len(order):
+                best[0], best[1] = acc, list(choice)
+                return
+            i = order[k]
+            for a, c in enumerate(cands[i]):
+                if acc + c[2] + suffix[k + 1] >= best[0]:
+                    break
+                sa = sets[i][a]
+                if used.isdisjoint(sa):
+                    choice[k] = a
+                    dfs(k + 1, used | sa, acc + c[2])
+
+        dfs(0, set(), 0.0)
+        pick = {i: old[i] for i in G} if best[1] is None else             {order[k]: cands[order[k]][a] for k, a in enumerate(best[1])}
+        for i in G:
+            self._add(i, pick[i])
+        return True
 
     # ------------------------------------------------------------------
     def load(self, sol):

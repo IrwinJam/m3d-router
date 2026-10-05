@@ -30,17 +30,6 @@ SLOW = dict(pres0=0.05, mult=1.03, hist_fac=0.05, pres_max=3, max_iters=8000, vc
             fan_exp=0.5)
 
 
-def _lock(path, timeout=600):
-    t = time.time()
-    while True:
-        try:
-            return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if time.time() - t > timeout:
-                os.remove(path)
-            time.sleep(0.5)
-
-
 def chunk(args):
     tier, case_file, best_path, minutes, seed, deadline, fresh = args
     if time.time() > deadline - 120:
@@ -53,6 +42,7 @@ def chunk(args):
     inst = json.load(open(case_file))
     I = Instance.from_dict(inst)
     r = Router(inst, seed=seed)
+    r.kernel = "bucket"
     order = r.default_order()
     rng = random.Random(seed)
     if fresh or not os.path.exists(best_path):
@@ -72,30 +62,26 @@ def chunk(args):
     rem = budget - (time.time() - t0)
     if rem > 0:
         ms, pw = rng.choice([(6, 0.5), (10, 0.8), (14, 0.9)])
-        r.lns(iters=10**9, time_limit=rem, T0=T0, T1=1.0, p_seq=0.2, max_set=ms, p_win=pw)
+        r.lns(iters=10**9, time_limit=rem, T0=T0, T1=1.0, p_seq=0.2, max_set=ms, p_win=pw,
+              p_joint=0.4)
     sol = r.solution()
     res = check(I, Submission.from_dict(sol))
     if not res.legal:
         return tier, os.path.basename(best_path), None, None, "ILLEGAL " + "; ".join(res.reasons[:2])
-    fd = _lock(best_path + ".lock")
+    cand = best_path + f".cand{seed}"
+    with open(cand + ".part", "w") as fh:          # rename only once fully written
+        json.dump(sol, fh)
+    os.replace(cand + ".part", cand)
+    return (tier, os.path.basename(best_path), res.total_delay, cand,
+            f"{mode} T0={T0} start={start:.0f} {time.time()-t0:.0f}s")
+
+
+def safe_chunk(args):
+    """Never let one worker's error stop the whole run."""
     try:
-        prev = None
-        if os.path.exists(best_path):
-            p = check(I, Submission.load(best_path))
-            prev = p.total_delay if p.legal else None
-        if prev is None or res.total_delay < prev:
-            tmp = best_path + f".tmp{seed}"
-            with open(tmp, "w") as fh:
-                json.dump(sol, fh)
-            os.replace(tmp, best_path)
-            kept = True
-        else:
-            kept = False
-    finally:
-        os.close(fd)
-        os.remove(best_path + ".lock")
-    return (tier, os.path.basename(best_path), res.total_delay, prev,
-            f"{mode} T0={T0} start={start:.0f} {'KEPT' if kept else ''} {time.time()-t0:.0f}s")
+        return chunk(args)
+    except Exception as e:                                   # noqa: BLE001
+        return args[0], os.path.basename(args[2]), None, None, f"ERROR {type(e).__name__}: {e}"
 
 
 def main():
@@ -133,11 +119,31 @@ def main():
         t, cf, bp = rng.choices(cases, weights)[0]
         tasks.append((t, cf, bp, a.chunk or CHUNK_MIN[t], rng.randrange(10**6), deadline,
                       1 if rng.random() < a.p_fresh else 0))
+    # only this process ever replaces a best file, so workers never race on it
+    from m3d.model import Instance, Submission
+    from m3d.checker import check
+    best = {}
+    for t, cf, bp in cases:
+        if os.path.exists(bp):
+            r = check(Instance.load(cf), Submission.load(bp))
+            best[bp] = r.total_delay if r.legal else None
     with Pool(a.jobs, maxtasksperchild=1) as pool:
-        for res in pool.imap_unordered(chunk, tasks):
+        for res in pool.imap_unordered(safe_chunk, [t for t in tasks]):
             if res is None:
                 continue
-            print(time.strftime("%H:%M:%S"), *res, flush=True)
+            tier, name, total, cand, msg = res
+            bp = os.path.join(a.best_root, tier, name)
+            prev = best.get(bp)
+            kept = False
+            if cand and total is not None:
+                if prev is None or total < prev:
+                    os.replace(cand, bp)
+                    best[bp] = total
+                    kept = True
+                else:
+                    os.remove(cand)
+            print(time.strftime("%H:%M:%S"), tier, name, total, prev, msg,
+                  "KEPT" if kept else "", flush=True)
             if time.time() > deadline:
                 pool.terminate()
                 break

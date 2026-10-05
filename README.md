@@ -15,8 +15,8 @@ is better). All 45 cases are legal.
 | hard | **1.3971** |
 | scale | **1.1188** |
 | stress | **1.0779** |
-| congested | **1.3069** |
-| designs | **1.4237** |
+| congested | **1.3156** |
+| designs | **1.4347** |
 
 Briefly held the top hard-tier score of any submission.
 
